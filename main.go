@@ -1,14 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
-	"strconv"
 
 	"database/sql"
+	"encoding/json"
+	"io/ioutil"
+	"path/filepath"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -24,6 +24,12 @@ type Stats struct {
 	Totals  int64 `json:"totals"`
 }
 
+// Row : structure to hold a returned MySQL row
+type Row struct {
+	Key	string
+	Value	string
+}
+
 func main() {
 	// get command line flags
 
@@ -31,7 +37,7 @@ func main() {
 	var icingaOut string
 	var exitCode int
 
-	myVersion := "0.0.1"
+	myVersion := "0.0.2"
 
 	hostAddress := flag.String("h", "127.0.0.1", "Host ")
 	hostPort := flag.String("p", "3306", "Target port")
@@ -43,6 +49,7 @@ func main() {
 	rCrit := flag.Int64("rcrit", 1500, "Critical level read operations")
 	wWarn := flag.Int64("wwarn", 50, "Warning level write operations")
 	wCrit := flag.Int64("wcrit", 100, "Critical level write operations")
+	outPath := flag.String("o", "", "directory for temporary stats files")
 
 	flag.Parse()
 
@@ -51,10 +58,16 @@ func main() {
 		os.Exit(0)
 	}
 
-	myPath, _ = os.Getwd()
+	if *outPath != "" {
+		myPath = *outPath
+	} else {
+		myPath, _ = os.Getwd()
+	}
+
+	myName, err := os.Executable()
 
 	// Get stats from last run
-	lastStats, _ := getOldStats(myPath + "/" + os.Args[0][2:] + "." + *hostAddress + ".stats")
+	lastStats, _ := getOldStats(myPath + "/" + filepath.Base(myName) + "." + *hostAddress + ".stats")
 
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/?timeout=%ds", *userName, *passWord, *hostAddress, *hostPort, *timeOut))
 	if err != nil {
@@ -62,52 +75,40 @@ func main() {
 	}
 	defer db.Close()
 
-	var result string
+	// var result string
 	var stats Stats
 
-	// Get total number of client side queries
-	// err = db.QueryRow("SHOW GLOBAL STATUS LIKE 'questions'").Scan(&stats.queries, dummy)
-	err = db.QueryRow("SELECT VARIABLE_VALUE FROM information_schema.global_status WHERE VARIABLE_NAME = 'QUESTIONS'").Scan(&result)
-	if err != nil {
-		panic(err.Error())
-	}
-	stats.Queries, err = strconv.ParseInt(result, 10, 64)
-
-	// Get total number of client side deletes
-	err = db.QueryRow("SELECT VARIABLE_VALUE FROM information_schema.global_status WHERE VARIABLE_NAME = 'COM_DELETE'").Scan(&result)
-	if err != nil {
-		panic(err.Error())
-	}
-	stats.Deletes, err = strconv.ParseInt(result, 10, 64)
-
-	// Get total number of client side inserts
-	err = db.QueryRow("SELECT VARIABLE_VALUE FROM information_schema.global_status WHERE VARIABLE_NAME = 'COM_INSERT'").Scan(&result)
-	if err != nil {
-		panic(err.Error())
-	}
-	stats.Inserts, err = strconv.ParseInt(result, 10, 64)
-
-	// Get total number of client side updates
-	err = db.QueryRow("SELECT VARIABLE_VALUE FROM information_schema.global_status WHERE VARIABLE_NAME = 'COM_UPDATE'").Scan(&result)
-	if err != nil {
-		panic(err.Error())
-	}
-	stats.Updates, err = strconv.ParseInt(result, 10, 64)
-
-	// Get total number of client side selects
-	err = db.QueryRow("SELECT VARIABLE_VALUE FROM information_schema.global_status WHERE VARIABLE_NAME = 'COM_SELECT'").Scan(&result)
-	if err != nil {
-		panic(err.Error())
-	}
-	stats.Selects, err = strconv.ParseInt(result, 10, 64)
-
-	// Get Uptime of current server in seconds
-	err = db.QueryRow("SELECT VARIABLE_VALUE FROM information_schema.global_status WHERE VARIABLE_NAME = 'UPTIME'").Scan(&result)
+	// Get all the results in one run
+	rows, err := db.Query("SELECT VARIABLE_NAME, VARIABLE_VALUE FROM information_schema.global_status WHERE VARIABLE_NAME IN ('QUESTIONS', 'COM_DELETE', 'COM_INSERT', 'COM_UPDATE', 'COM_SELECT', 'UPTIME')")
 	if err != nil {
 		panic(err.Error())
 	}
 
-	stats.Uptime, err = strconv.ParseInt(result, 10, 64)
+	for rows.Next() {
+		var key string
+		var val int64
+
+		if err :=  rows.Scan(&key, &val); err != nil {
+			panic(err.Error())
+		}
+		switch key {
+			case "QUESTIONS":
+				stats.Queries = val
+			case "COM_DELETE":
+				stats.Deletes = val
+			case "COM_INSERT":
+				stats.Inserts = val
+			case "COM_UPDATE":
+				stats.Updates = val
+			case "COM_SELECT":
+				stats.Selects = val
+			case "UPTIME":
+				stats.Uptime = val
+			default:
+				continue
+		}
+	}
+
 	stats.Totals = stats.Selects + stats.Deletes + stats.Inserts + stats.Updates
 
 	// Check for MySQL restart - reset counters if there was
@@ -122,11 +123,10 @@ func main() {
 	}
 
 	// write the data to the SQLite store
-	err = writeNewStats(myPath+"/"+os.Args[0][2:]+"."+*hostAddress+".stats", stats)
+	err = writeNewStats(myPath+"/"+filepath.Base(myName)+"."+*hostAddress+".stats", stats)
 
 	diffTime := stats.Uptime - lastStats.Uptime
 
-	// curOps := (stats.Totals - lastStats.Totals) / diffTime
 	curRps := (stats.Selects - lastStats.Selects) / diffTime
 	curWps := (stats.Deletes + stats.Updates + stats.Inserts - lastStats.Deletes - lastStats.Updates - lastStats.Inserts) / diffTime
 

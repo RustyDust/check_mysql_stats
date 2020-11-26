@@ -23,6 +23,7 @@ something I could use as well.
 * `-wcrit` - critical level for write requests (in ops/s, default: 100)
 * `-t` - timeout when connecting to MySQL/MariaDB (in s, default: 5)
 * `-v` - display version information
+* `-o` - directory where to put stat files (default: current dir of binary)
 * `-help` - display help/usage information
 
 ## Output
