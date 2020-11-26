@@ -24,12 +24,6 @@ type Stats struct {
 	Totals  int64 `json:"totals"`
 }
 
-// Row : structure to hold a returned MySQL row
-type Row struct {
-	Key	string
-	Value	string
-}
-
 func main() {
 	// get command line flags
 
